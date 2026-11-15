@@ -275,7 +275,7 @@ def main():
             fn(a, a.out)
         except Exception as e:
             print(f"\n!! {name} check failed: {e!r}", file=sys.stderr)
-    print("\nDone. Paste everything above back to Claude.")
+    print("\nDone.")
 
 
 if __name__ == "__main__":

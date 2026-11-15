@@ -30,4 +30,5 @@ typing_extensions>=4.4.0
 urllib3==2.1.0
 # added for 4-bit inference + evaluation scripts
 bitsandbytes==0.43.1
+accelerate==0.26.1
 pandas

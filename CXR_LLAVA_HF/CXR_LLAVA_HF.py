@@ -113,14 +113,17 @@ class CXRLLAVAModel(PreTrainedModel):
             return dtype
 
         self.clip_cast_dtype = convert_dtype(config.clip_vision_tower_dtype)
+        # [repro] dtype used for weights/activations. Original code hardcoded bf16; set
+        # config.compute_dtype = "fp16" for GPUs without bf16 (e.g. Turing). Default keeps bf16.
+        self.compute_dtype = convert_dtype(getattr(config, "compute_dtype", "bf16"))
         self.mm_projector = torch.nn.Linear(config.mm_projector_dim, config.llama['hidden_size'])
         self.lm_head = torch.nn.Linear(config.llama.hidden_size, config.llama.vocab_size, bias=False)
         self.llama = transformers.LlamaModel(transformers.LlamaConfig(**config.llama))
 
-        self.llama = self.llama.to(torch.bfloat16)
-        self.lm_head = self.lm_head.to(torch.bfloat16)
-        self.vision_tower = self.vision_tower.to(torch.bfloat16)
-        self.mm_projector = self.mm_projector.to(torch.bfloat16)
+        self.llama = self.llama.to(self.compute_dtype)
+        self.lm_head = self.lm_head.to(self.compute_dtype)
+        self.vision_tower = self.vision_tower.to(self.compute_dtype)
+        self.mm_projector = self.mm_projector.to(self.compute_dtype)
 
     def get_input_embeddings(self):
         return self.llama.get_input_embeddings()
@@ -132,7 +135,7 @@ class CXRLLAVAModel(PreTrainedModel):
         return self.llama.gradient_checkpointing_enable()
 
     def encode_images(self, images):
-        images = images.to(torch.bfloat16)
+        images = images.to(self.compute_dtype)
 
         def _expand_token(token, batch_size: int):
             return token.view(1, 1, -1).expand(batch_size, -1, -1)
@@ -182,10 +185,10 @@ class CXRLLAVAModel(PreTrainedModel):
             pooled = pooled @ self.vision_tower.proj
 
         image_features = tokens
-        image_features = image_features.to(torch.bfloat16)
+        image_features = image_features.to(self.compute_dtype)
         image_features = self.mm_projector(image_features)
 
-        image_features = image_features.to(torch.bfloat16)
+        image_features = image_features.to(self.compute_dtype)
         return image_features
 
     def forward(
@@ -610,7 +613,7 @@ class CXRLLAVAModel(PreTrainedModel):
             prompt = self.apply_chat_template(chat)
             images = self.vision_tower.image_processor(image, return_tensors='pt')['pixel_values']
             images = images.to(self.device)
-            input_ids = self.tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).cuda()
+            input_ids = self.tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt').unsqueeze(0).to(self.device)
             stopping_criteria = KeywordsStoppingCriteria(["</s>"], self.tokenizer, input_ids)
 
             image_args = {"images": images}
@@ -637,6 +640,57 @@ class CXRLLAVAModel(PreTrainedModel):
                 generated_text += new_text
 
         return generated_text
+
+    # [repro] Non-streaming report generation for batch evaluation.
+    # Same prompt, preprocessing and stopping rule as write_radiologic_report /
+    # generate_cxr_repsonse, but calls self.generate() directly (no thread, no
+    # 15 s streamer timeout), so errors raise instead of yielding an empty report.
+    # temperature <= 0.001 -> greedy decoding.
+    def generate_report(self, image, temperature=0.0, top_p=0.8, max_new_tokens=512):
+        chat = [
+            {"role": "system",
+             "content": "You are a helpful radiologist. Try to interpret chest x ray image and answer to the question that user provides."},
+            {"role": "user",
+             "content": "<image>\nWrite a radiologic report on the given chest radiograph, including information about atelectasis, cardiomegaly, consolidation, pulmonary edema, pleural effusion, and pneumothorax.\n"}
+        ]
+        with torch.no_grad():
+            if np.array(image).max() > 255:
+                raise Exception("16-bit image is not supported.")
+
+            image = np.array(image.convert('L'))  # grayscale
+            if len(image.shape) == 2:
+                image = np.expand_dims(image, axis=-1)  # (H, W) -> (H, W, 1)
+
+            prompt = self.apply_chat_template(chat)
+            images = self.vision_tower.image_processor(image, return_tensors='pt')['pixel_values'].to(self.device)
+            input_ids = self.tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX,
+                                                   return_tensors='pt').unsqueeze(0).to(self.device)
+            stopping_criteria = KeywordsStoppingCriteria(["</s>"], self.tokenizer, input_ids)
+
+            max_context_length = getattr(self.config, 'max_position_embeddings', 2048)
+            max_new_tokens = min(max_new_tokens, max_context_length - input_ids.shape[-1] - 1)
+
+            gen_kwargs = dict(
+                inputs=input_ids,
+                images=images,
+                max_new_tokens=max_new_tokens,
+                stopping_criteria=[stopping_criteria],
+                use_cache=True,
+                generation_config=self.generation_config,
+            )
+            if temperature > 0.001:
+                gen_kwargs.update(do_sample=True, temperature=temperature, top_p=top_p)
+            else:
+                gen_kwargs.update(do_sample=False, temperature=None, top_p=None)
+
+            output_ids = self.generate(**gen_kwargs)
+
+        # output contains the prompt (incl. the -200 image token) -> keep only new tokens
+        new_ids = output_ids[0, input_ids.shape[1]:]
+        text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
+        if text.endswith("</s>"):
+            text = text[:-len("</s>")]
+        return text.strip()
 
     def tokenizer_image_token(self, prompt, tokenizer, image_token_index=IMAGE_TOKEN_INDEX, return_tensors=None):
         prompt_chunks = [tokenizer(chunk).input_ids for chunk in prompt.split('<image>')]
