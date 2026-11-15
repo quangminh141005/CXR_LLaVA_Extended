@@ -183,10 +183,13 @@ def check_chexpert(a, out):
     missing_cols = [f for f in FINDINGS if f not in gt.columns]
     print(f"6 findings present in columns: {not missing_cols}  {missing_cols or ''}")
 
-    idx, errs = index_files(a.chexpert_root, (".jpg",))
-    frontal = {}
+    frontal, n_jpg, errs = {}, 0, 0
+    def onerror(_):
+        nonlocal errs
+        errs += 1
     # index by "patientX/studyY" -> frontal jpgs
-    for dirpath, _, files in os.walk(a.chexpert_root, onerror=lambda e: None):
+    for dirpath, _, files in os.walk(a.chexpert_root, onerror=onerror):
+        n_jpg += sum(f.lower().endswith(".jpg") for f in files)
         m = re.search(r"(patient\d+/study\d+)$", dirpath)
         if m:
             fr = sorted(f for f in files if f.endswith("_frontal.jpg"))
@@ -195,7 +198,7 @@ def check_chexpert(a, out):
     keys = [re.search(r"(patient\d+/study\d+)", s).group(1) for s in gt["Study"]]
     found = [k for k in keys if k in frontal]
     st = statuses([frontal[k] for k in found], a.verify)
-    print(f"jpg files under root: {len(idx)} (walk errors: {errs})")
+    print(f"jpg files under root: {n_jpg} (walk errors: {errs})")
     print(f"studies with a frontal image: {len(found)}/{len(keys)}  readable: {Counter(st)['ok']}")
     if found:
         print(f"example path: {frontal[found[0]]}")

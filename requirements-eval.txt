@@ -1,0 +1,10 @@
+# Scoring env (cxreval), separate from the inference env because these
+# packages need newer transformers than CXR-LLaVA allows.
+# Unpinned on purpose for now: pin to whatever installs cleanly on the server.
+#   pip install -r requirements-eval.txt
+f1chexbert
+radgraph
+pycocoevalcap
+bert-score
+scikit-learn
+pandas
