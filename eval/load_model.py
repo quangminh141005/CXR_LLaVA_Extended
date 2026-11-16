@@ -7,8 +7,13 @@ fp16 instead of the paper's bf16 because Turing GPUs have no bf16.
 The model class is imported from this repo's CXR_LLAVA_HF/ (not via
 trust_remote_code), so edits in CXR_LLAVA_HF/CXR_LLAVA_HF.py are what runs.
 
+Step 2.5 adds a full-precision CPU reference (no quantization) to compare against:
+    --device cpu --dtype fp32|bf16   (whole model in RAM, ~28 / ~14 GB)
+
 Usage (on the server, from anywhere):
-    python eval/load_model.py --images IMG/img.jpg a.png b.jpg ...
+    python eval/load_model.py --images IMG/img.jpg a.png b.jpg ...                     # 4-bit GPU
+    numactl --cpunodebind=0 --membind=0 \
+      python eval/load_model.py --device cpu --dtype fp32 --threads 20 --images ...     # CPU reference
 """
 import argparse
 import os
@@ -51,6 +56,44 @@ def load_model(weights_dir=DEFAULT_WEIGHTS, device=0):
     )
     model.eval()
     return model
+
+
+CPU_DTYPES = {"fp32": torch.float32, "bf16": torch.bfloat16}
+
+
+def load_model_cpu(weights_dir=DEFAULT_WEIGHTS, dtype="fp32"):
+    """Full-precision reference: no quantization, whole model on CPU in fp32 or bf16 (authors' dtype)."""
+    weights_dir = os.path.abspath(weights_dir)
+    config = CXRLLAVAConfig.from_pretrained(weights_dir)
+    config.compute_dtype = dtype
+    config._name_or_path = weights_dir
+    model = CXRLLAVAModel.from_pretrained(
+        weights_dir,
+        config=config,
+        torch_dtype=CPU_DTYPES[dtype],
+        low_cpu_mem_usage=True,
+        use_safetensors=True,
+    )
+    model.eval()
+    return model
+
+
+def check_model_cpu(model, dtype):
+    """Reference must be unquantized and entirely in the requested dtype."""
+    want = str(CPU_DTYPES[dtype]).replace("torch.", "")
+    found = sorted({str(p.dtype).replace("torch.", "") for p in model.parameters()})
+    devices = sorted({str(p.device) for p in model.parameters()})
+    n_params = sum(p.numel() for p in model.parameters())
+    print("\n== Model check (CPU reference) ==")
+    print(f"  param dtypes: {found}   devices: {devices}   params: {n_params / 1e9:.2f} B")
+    print(f"  footprint: {model.get_memory_footprint() / 1e9:.2f} GB")
+    assert found == [want], f"expected only {want}, found {found}"
+    assert devices == ["cpu"], f"expected cpu only, found {devices}"
+
+
+def peak_rss_gb():
+    import resource
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6  # Linux: KB -> GB
 
 
 def check_model(model):
@@ -102,17 +145,32 @@ def main():
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
     ap.add_argument("--images", nargs="+", default=[os.path.join(REPO, "IMG", "img.jpg")])
     ap.add_argument("--temperature", type=float, default=0.0, help="0 = greedy (as in the plan)")
+    ap.add_argument("--device", choices=["cuda", "cpu"], default="cuda",
+                    help="cuda = 4-bit NF4 on GPU (default); cpu = unquantized reference")
+    ap.add_argument("--dtype", choices=list(CPU_DTYPES), default="fp32", help="CPU reference dtype")
+    ap.add_argument("--threads", type=int, default=20, help="CPU threads (20 = one socket)")
     args = ap.parse_args()
+    gpu = args.device == "cuda"
 
-    assert torch.cuda.is_available(), "CUDA not available"
-    print(f"GPU: {torch.cuda.get_device_name(0)}, "
-          f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    if gpu:
+        assert torch.cuda.is_available(), "CUDA not available"
+        print(f"GPU: {torch.cuda.get_device_name(0)}, "
+              f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    else:
+        torch.set_num_threads(args.threads)
+        print(f"CPU reference: dtype={args.dtype}, torch threads={torch.get_num_threads()}, "
+              f"cores visible={len(os.sched_getaffinity(0))}")
 
     t0 = time.perf_counter()
-    model = load_model(args.weights)
-    print(f"Loaded in {time.perf_counter() - t0:.0f} s, "
-          f"VRAM allocated after load: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-    check_model(model)
+    if gpu:
+        model = load_model(args.weights)
+        print(f"Loaded in {time.perf_counter() - t0:.0f} s, "
+              f"VRAM allocated after load: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        check_model(model)
+    else:
+        model = load_model_cpu(args.weights, args.dtype)
+        print(f"Loaded in {time.perf_counter() - t0:.0f} s, peak RAM so far: {peak_rss_gb():.1f} GB")
+        check_model_cpu(model, args.dtype)
 
     print("\n== Vision fp16 check ==")
     if not check_vision_finite(model, Image.open(args.images[0])):
@@ -120,14 +178,17 @@ def main():
         sys.exit(1)
 
     print("\n== Reports ==")
-    torch.cuda.reset_peak_memory_stats()
+    if gpu:
+        torch.cuda.reset_peak_memory_stats()
     times = []
     for path in args.images:
         image = Image.open(path)
-        torch.cuda.synchronize()
+        if gpu:
+            torch.cuda.synchronize()
         t = time.perf_counter()
         report = model.generate_report(image, temperature=args.temperature)
-        torch.cuda.synchronize()
+        if gpu:
+            torch.cuda.synchronize()
         dt = time.perf_counter() - t
         times.append(dt)
         n_tok = len(model.tokenizer(report).input_ids)
@@ -136,8 +197,11 @@ def main():
         print(report if report else "!! EMPTY REPORT")
 
     print("\n== Summary ==")
-    print(f"  peak VRAM allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
-    print(f"  peak VRAM reserved:  {torch.cuda.max_memory_reserved() / 1e9:.2f} GB")
+    if gpu:
+        print(f"  peak VRAM allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+        print(f"  peak VRAM reserved:  {torch.cuda.max_memory_reserved() / 1e9:.2f} GB")
+    else:
+        print(f"  mode: CPU {args.dtype}, {torch.get_num_threads()} threads, peak RAM {peak_rss_gb():.1f} GB")
     print(f"  s/image: mean {sum(times) / len(times):.1f}"
           + (f", mean excl. first (warm-up) {sum(times[1:]) / len(times[1:]):.1f}" if len(times) > 1 else ""))
 

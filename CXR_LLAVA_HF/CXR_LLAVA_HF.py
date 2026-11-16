@@ -681,7 +681,8 @@ class CXRLLAVAModel(PreTrainedModel):
             if temperature > 0.001:
                 gen_kwargs.update(do_sample=True, temperature=temperature, top_p=top_p)
             else:
-                gen_kwargs.update(do_sample=False, temperature=None, top_p=None)
+                # 1.0 = neutral values; None triggers transformers 4.36 UserWarnings
+                gen_kwargs.update(do_sample=False, temperature=1.0, top_p=1.0)
 
             output_ids = self.generate(**gen_kwargs)
 
