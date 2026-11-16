@@ -1,3 +1,4 @@
 *.md
 # model weights (downloaded from Hugging Face)
 weights/
+*.log
