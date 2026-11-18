@@ -5,3 +5,6 @@ weights/
 log/*
 __pycache__
 
+# test-set manifests (MIMIC paths/labels, PhysioNet DUA) and inference outputs
+manifests/
+results/
