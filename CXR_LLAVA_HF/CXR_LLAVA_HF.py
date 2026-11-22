@@ -653,6 +653,38 @@ class CXRLLAVAModel(PreTrainedModel):
             {"role": "user",
              "content": "<image>\nWrite a radiologic report on the given chest radiograph, including information about atelectasis, cardiomegaly, consolidation, pulmonary edema, pleural effusion, and pneumothorax.\n"}
         ]
+        return self._generate_text(chat, image, temperature, top_p, max_new_tokens)
+
+    # [repro] CheXpert test set: the paper "instructed the model to generate binary labels for
+    # the same 14 findings" (Lee et al. 2025, p.4378, Fig. 2b). The exact CXR-LLaVA prompt is not
+    # published; these are the CheXpert prompts the supplement gives for GPT-4V ("gpt4v") and
+    # Gemini-Pro-Vision ("gemini"), sent with CXR-LLaVA's own system prompt.
+    LABEL_FINDINGS = ["No Finding", "Enlarged Cardiomediastinum", "Cardiomegaly", "Lung Lesion", "Lung Opacity",
+                      "Edema", "Consolidation", "Pneumonia", "Atelectasis", "Pneumothorax", "Pleural Effusion",
+                      "Pleural Other", "Fracture", "Support Devices"]
+    LABEL_PROMPTS = {
+        "gpt4v": ("Label each finding in JSON format. If a finding is present, the value will be 1; if not, the "
+                  "value will be 0. The findings include 'No Finding', 'Enlarged Cardiomediastinum', "
+                  "'Cardiomegaly', 'Lung Lesion', 'Lung Opacity', 'Edema', 'Consolidation', 'Pneumonia', "
+                  "'Atelectasis', 'Pneumothorax', 'Pleural Effusion', 'Pleural Other', 'Fracture', and 'Support "
+                  "Devices'."),
+        "gemini": ("Write a radiologic report and label finding of given chest radiograph in JSON formatted string!\n"
+                   "If a radiologic finding is present, the value will be 1; if not, the value will be 0.\n"
+                   "EXAMPLE:\n{\n"
+                   + ",\n".join(f'    "{f}": {1 if f == "Pleural Effusion" else 0}' for f in LABEL_FINDINGS)
+                   + "\n}"),
+    }
+
+    def generate_labels(self, image, prompt="gemini", temperature=0.0, top_p=0.8, max_new_tokens=512):
+        """Raw model output for a label prompt (parse with eval/label_json.py)."""
+        chat = [
+            {"role": "system",
+             "content": "You are a helpful radiologist. Try to interpret chest x ray image and answer to the question that user provides."},
+            {"role": "user", "content": "<image>\n" + self.LABEL_PROMPTS[prompt] + "\n"}
+        ]
+        return self._generate_text(chat, image, temperature, top_p, max_new_tokens)
+
+    def _generate_text(self, chat, image, temperature=0.0, top_p=0.8, max_new_tokens=512):
         with torch.no_grad():
             if np.array(image).max() > 255:
                 raise Exception("16-bit image is not supported.")

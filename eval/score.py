@@ -17,7 +17,9 @@ each resample recomputes every metric incl. the exclusion, so averages get CIs t
 
 Usage (on the server, repo root, env cxreval):
     python -u eval/score.py 2>&1 | tee log/score.log
-Output: results/scores_<ds>.csv (long format: one row per table row x metric)
+    python -u eval/score.py --datasets chexpert --tag _json_gemini 2>&1 | tee log/score_json_gemini.log
+Output: results/scores_<ds><tag>.csv (long format: one row per table row x metric)
+--tag selects results/<ds>_pred_labels<tag>.csv (e.g. _json_gemini = label-prompt route)
 """
 import argparse
 import os
@@ -181,16 +183,17 @@ def main():
     ap.add_argument("--results", default=os.path.join(REPO, "results"))
     ap.add_argument("--n_boot", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--tag", default="", help="prediction file suffix: <ds>_pred_labels<tag>.csv")
     args = ap.parse_args()
 
     for ds in args.datasets:
         gt = pd.read_csv(os.path.join(args.manifests, f"{ds}.csv"))
-        pred = pd.read_csv(os.path.join(args.results, f"{ds}_pred_labels.csv"))
+        pred = pd.read_csv(os.path.join(args.results, f"{ds}_pred_labels{args.tag}.csv"))
         out, df = score_dataset(ds, gt, pred, args.n_boot, args.seed)
         print(f"\n{'=' * 78}\n{ds.upper()}\n{'=' * 78}")
         print_pred_distribution(ds, df)
         print_tables(ds, out)
-        path = os.path.join(args.results, f"scores_{ds}.csv")
+        path = os.path.join(args.results, f"scores_{ds}{args.tag}.csv")
         out.to_csv(path, index=False)
         print(f"\n-> {path}")
     print("\nAverages: 'ours (micro)' pools TP/FP/FN/TN over the findings, as the paper does (Q9).")
