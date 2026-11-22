@@ -20,6 +20,8 @@ Usage (on the server, repo root, env cxreval):
     python -u eval/score.py --datasets chexpert --tag _json_gemini 2>&1 | tee log/score_json_gemini.log
 Output: results/scores_<ds><tag>.csv (long format: one row per table row x metric)
 --tag selects results/<ds>_pred_labels<tag>.csv (e.g. _json_gemini = label-prompt route)
+    and names the output; --gt replaces the GT manifest (one dataset at a time), e.g.
+    python -u eval/score.py --datasets mimic --gt manifests/mimic_gt_full.csv --tag _gt_full
 """
 import argparse
 import os
@@ -184,11 +186,20 @@ def main():
     ap.add_argument("--n_boot", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="", help="prediction file suffix: <ds>_pred_labels<tag>.csv")
+    ap.add_argument("--gt", default=None, help="GT manifest to use instead of manifests/<ds>.csv")
+    ap.add_argument("--pred_tag", default=None,
+                    help="prediction suffix if different from --tag (default: same as --tag, or '' with --gt)")
     args = ap.parse_args()
+    if args.gt and len(args.datasets) != 1:
+        ap.error("--gt needs exactly one --datasets")
+    pred_tag = args.pred_tag if args.pred_tag is not None else ("" if args.gt else args.tag)
 
     for ds in args.datasets:
-        gt = pd.read_csv(os.path.join(args.manifests, f"{ds}.csv"))
-        pred = pd.read_csv(os.path.join(args.results, f"{ds}_pred_labels{args.tag}.csv"))
+        gt_path = args.gt or os.path.join(args.manifests, f"{ds}.csv")
+        pred_path = os.path.join(args.results, f"{ds}_pred_labels{pred_tag}.csv")
+        print(f"\nGT: {gt_path}\npredictions: {pred_path}")
+        gt = pd.read_csv(gt_path)
+        pred = pd.read_csv(pred_path)
         out, df = score_dataset(ds, gt, pred, args.n_boot, args.seed)
         print(f"\n{'=' * 78}\n{ds.upper()}\n{'=' * 78}")
         print_pred_distribution(ds, df)
