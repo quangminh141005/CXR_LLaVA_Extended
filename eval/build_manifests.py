@@ -196,8 +196,10 @@ def build_vindr(a):
     # boxes
     bx = pd.read_csv(vc.VINDR_BOXES_TEST)
     bx = bx[bx["class_name"] != "No finding"].dropna(subset=["x_min", "y_min", "x_max", "y_max"])
-    print(f"\nboxes: {len(bx)} (excl. 'No finding'), images with boxes {bx['image_id'].nunique()}, "
-          f"rad_ids {sorted(bx['rad_id'].unique())[:10]}")
+    rads = f", rad_ids {sorted(bx['rad_id'].unique())[:10]}" if "rad_id" in bx.columns else \
+        " (no rad_id column: consensus boxes)"
+    print(f"\nboxes file columns: {list(bx.columns)}")
+    print(f"boxes: {len(bx)} (excl. 'No finding'), images with boxes {bx['image_id'].nunique()}{rads}")
     size = df.set_index("image_id")[["width", "height"]]
     bx = bx.join(size, on="image_id")
     outside = bx[(bx["x_max"] > bx["width"] + 1) | (bx["y_max"] > bx["height"] + 1) |
