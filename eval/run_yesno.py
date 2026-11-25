@@ -13,6 +13,7 @@ Sub-commands:
 
 Usage (on the server, repo root, inference env, in tmux):
     python -u eval/run_yesno.py smoke --n 20 2>&1 | tee log/inference/yesno_smoke.log
+    python -u eval/run_yesno.py smoke --n 20 --priming_only 2>&1 | tee log/inference/yesno_smoke_priming.log
     python -u eval/run_yesno.py prior 2>&1 | tee log/inference/yesno_prior.log
     python -u eval/run_yesno.py real 2>&1 | tee -a log/inference/yesno_vindr.log
 """
@@ -34,6 +35,33 @@ import vindr_common as vc  # noqa: E402
 
 ETA_EVERY = 50
 SMOKE_GREEDY = ["plain__pleural_effusion", "plain__cardiomegaly", "plain__pneumothorax", "plain__nodule_mass"]
+PRIMING_GREEDY = ["guided__pneumothorax", "control__pneumothorax", "guided__nodule_mass", "control__nodule_mass"]
+MIN_MASS = 0.8  # acceptance: median P(yes or no) per question on the smoke images
+
+
+def priming_questions(qs):
+    """the 6 guided/control questions + the 2 plain ones they are compared with"""
+    keep = {f"{p}__{vc.slug(f)}" for f in vc.GUIDED for p in ("plain", "guided", "control")}
+    return {k: v for k, v in qs.items() if k in keep}
+
+
+def mass_table(rows):
+    """per question: median / min P(yes or no), median p_yes, most common first tokens"""
+    from collections import Counter, defaultdict
+    m, py, top = defaultdict(list), defaultdict(list), defaultdict(Counter)
+    for r in rows:
+        for q, v in r.items():
+            m[q].append(v["mass_yes_no"])
+            py[q].append(v["p_yes"])
+            top[q][v["top_token"]] += 1
+    print(f"\n{'question':28s} mass_med mass_min p_yes_med  top first tokens")
+    failed = []
+    for q in sorted(m, key=lambda q: np.median(m[q])):
+        med = float(np.median(m[q]))
+        flag = "" if med >= MIN_MASS else f"  <-- below {MIN_MASS}"
+        failed += [q] if flag else []
+        print(f"{q:28s} {med:8.3f} {min(m[q]):8.3f} {np.median(py[q]):9.2f}  {dict(top[q].most_common(3))}{flag}")
+    print(f"questions with median mass < {MIN_MASS}: {failed if failed else 'none'}")
 
 
 def load(args):
@@ -69,10 +97,11 @@ def cmd_smoke(args, model, qs):
     from PIL import Image
     out_dir = os.path.join(CHECKS, "yesno_smoke")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, "smoke.jsonl")
+    out_path = os.path.join(out_dir, "smoke_priming.jsonl" if args.priming_only else "smoke.jsonl")
     open(out_path, "w").close()
     man = pd.read_csv(args.manifest).head(args.n)
-    diffs, masses, agree, n_cmp = [], [], 0, 0
+    greedy_qs = PRIMING_GREEDY if args.priming_only else SMOKE_GREEDY
+    diffs, masses, agree, n_cmp, all_probs = [], [], 0, 0, []
     for i, (_, r) in enumerate(man.iterrows(), 1):
         with Image.open(r["image_path"]) as im:
             im.load()
@@ -80,7 +109,8 @@ def cmd_smoke(args, model, qs):
             res = model.yes_no_probs(im, qs, check_full=True)
             dt = time.perf_counter() - t
             greedy = {q: model._generate_text(model._yes_no_chat(qs[q]), im, temperature=0.0, max_new_tokens=8)
-                      for q in SMOKE_GREEDY}
+                      for q in greedy_qs}
+        all_probs.append(res)
         diffs += [v["max_abs_logit_diff"] for v in res.values()]
         masses += [v["mass_yes_no"] for v in res.values()]
         for q, text in greedy.items():
@@ -90,14 +120,16 @@ def cmd_smoke(args, model, qs):
             agree += first.startswith(pred[:2])
         write_jsonl(out_path, {"key": r["key"], "seconds_with_full_check": round(dt, 2), "probs": res, "greedy": greedy})
         print(f"[{i}/{len(man)}] {r['key']} {dt:.1f} s (incl. full-prompt check) | " + " | ".join(
-            f"{q.split('__')[1]} p={res[q]['p_yes']:.2f} greedy={greedy[q]!r}" for q in SMOKE_GREEDY))
+            f"{q} p={res[q]['p_yes']:.2f} greedy={greedy[q]!r}" for q in greedy_qs))
     diffs, masses = np.array(diffs), np.array(masses)
     print("\n== smoke summary ==")
     print(f"cached vs full logits: max abs diff max {diffs.max():.4f}, median {np.median(diffs):.4f} "
           f"(fp16 noise is ~1e-2; >0.5 would mean the cache path is wrong)")
     print(f"P(yes or no) at the first token: min {masses.min():.3f}, median {np.median(masses):.3f}, "
           f"share < 0.9: {(masses < 0.9).mean():.2%}")
-    print(f"p_yes > 0.5 agrees with the greedy answer: {agree}/{n_cmp}")
+    print(f"p_yes > 0.5 agrees with the greedy answer: {agree}/{n_cmp} "
+          "(only answers starting with yes/no can agree; 'There is ...' counts as disagreement)")
+    mass_table(all_probs)
     print(f"-> {out_path}")
 
 
@@ -154,6 +186,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cmd", choices=["smoke", "real", "prior"])
     ap.add_argument("--n", type=int, default=20, help="smoke: number of images")
+    ap.add_argument("--priming_only", action="store_true",
+                    help="smoke: only the guided/control questions + their plain ones (prompt wording check)")
     ap.add_argument("--n_noise", type=int, default=5, help="prior: number of noise images")
     ap.add_argument("--limit", type=int, default=None, help="real: first N manifest rows")
     ap.add_argument("--manifest", default=os.path.join(REPO, "manifests", "vindr.csv"))
@@ -182,6 +216,8 @@ def main():
         items = prior_items(args.n_noise)
     os.makedirs(args.out, exist_ok=True)
 
+    if args.cmd == "smoke" and args.priming_only:
+        qs = priming_questions(qs)
     model = load(args)
     show_tokens(model, qs)
     if args.cmd == "smoke":

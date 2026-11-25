@@ -206,7 +206,7 @@ def exp2_vs_report(df, P, idx):
     return pd.DataFrame(out)
 
 
-def exp2_priming(ym, P, idx):
+def exp2_priming(ym, P, M, idx):
     out = []
     for f in vc.GUIDED:
         y = (ym[vc.vd(f)] == 1).to_numpy()
@@ -216,7 +216,10 @@ def exp2_priming(ym, P, idx):
             rec = {"finding": f, "prompt": pr, "n_pos": int(y.sum()), "n_neg": int((~y).sum())}
             m = {"auroc": auroc_boot(s, y, idx), "sens_at_0.5": rate(y & (s > .5), y, idx),
                  "spec_at_0.5": rate(~y & (s <= .5), ~y, idx), "mean_p_yes_pos": rate(s * y, y, idx),
-                 "mean_p_yes_neg": rate(s * ~y, ~y, idx)}
+                 "mean_p_yes_neg": rate(s * ~y, ~y, idx),
+                 # mean P(yes or no) at the first token: a prompt that pushes the model out of yes/no answers
+                 # (low mass) changes the answer format, not only what the model sees
+                 "mean_mass_yes_no": rate(M[f"{pr}__{vc.slug(f)}"].to_numpy(float), np.ones(len(y)), idx)}
             for k, (pt, b) in m.items():
                 put(rec, k, pt, b)
             boots[pr] = m
@@ -336,11 +339,11 @@ def fig_auroc(auc, path):
 
 
 def fig_priming(prim, path):
-    """Per finding: AUROC, sensitivity and specificity at 0.5 for plain / guided / control prompts."""
+    """Per finding: AUROC, sensitivity / specificity at 0.5 and yes/no mass for plain / guided / control prompts."""
     import matplotlib.pyplot as plt
     fs, metrics = list(vc.GUIDED), [("auroc", "AUROC"), ("sens_at_0.5", "sensitivity @0.5"),
-                                    ("spec_at_0.5", "specificity @0.5")]
-    fig, axes = plt.subplots(1, len(metrics), figsize=(4 * len(metrics), 1.1 * len(fs) + 1.6), sharey=True)
+                                    ("spec_at_0.5", "specificity @0.5"), ("mean_mass_yes_no", "P(yes or no), mean")]
+    fig, axes = plt.subplots(1, len(metrics), figsize=(3.6 * len(metrics), 1.1 * len(fs) + 1.6), sharey=True)
     for ax, (m, title) in zip(axes, metrics):
         for j, (pr, c) in enumerate(zip(PROMPTS, (S1, S2, S3))):
             e = prim[prim["prompt"] == pr].set_index("finding").reindex(fs)
@@ -420,10 +423,11 @@ def main():
              ["finding", "n_pos", "auroc", "sens_at_0.5", "spec_at_0.5", "mean_p_yes_pos", "mean_p_yes_neg"]
              + (["prior_black", "prior_noise_mean", "share_above_black_neg"] if prior is not None else [])
              + ["median_mass_yes_no"])
-        prim = exp2_priming(ym, P, idx2)
+        prim = exp2_priming(ym, P, M, idx2)
         prim.to_csv(os.path.join(args.out, "vindr_exp2_priming.csv"), index=False)
         show("Exp 2: priming (deltas are paired bootstrap)", prim,
-             ["finding", "prompt", "n_pos", "auroc", "sens_at_0.5", "spec_at_0.5", "mean_p_yes_pos", "mean_p_yes_neg"])
+             ["finding", "prompt", "n_pos", "auroc", "sens_at_0.5", "spec_at_0.5", "mean_p_yes_pos", "mean_p_yes_neg",
+              "mean_mass_yes_no"])
         fig_auroc(auc, os.path.join(args.figs, "vindr_exp2_auroc.png"))
         fig_priming(prim, os.path.join(args.figs, "vindr_exp2_priming.png"))
 

@@ -51,7 +51,8 @@ for _row, (_vlabs, _cx) in EXP1_ROWS.items():
 CHEXPERT_FROM_VINDR["No Finding"] = ["No finding"]  # inverted logic not needed: VinDr has the label itself
 
 # ---------------------------------------------------------------- Exp 2: yes/no questions
-QUESTION = "Is there {} in this chest X-ray? Answer yes or no."
+QUESTION_ONLY = "Is there {} in this chest X-ray?"
+QUESTION = QUESTION_ONLY + " Answer yes or no."
 # VinDr label -> phrase inserted in QUESTION ("Other lesion", "Other disease(s)", "No finding" not asked)
 YESNO_FINDINGS = {
     "Aortic enlargement": "aortic enlargement",
@@ -80,7 +81,10 @@ YESNO_FINDINGS = {
     "Pneumonia": "pneumonia",
     "Tuberculosis": "tuberculosis",
 }
-# Priming: guided prompt (content) and a length-matched neutral preamble (control for "more text")
+# Priming. All three prompts end with the plain question's instruction; guidance (or a neutral, length-matched
+# sentence) sits between the question and "Answer yes or no.". v1 put it BEFORE the question -> the model
+# switched to report mode ("There is ...") and P(yes or no) fell to 0.22-0.65 (smoke test 2026-11-25).
+ANSWER = "Answer yes or no."
 GUIDED = {
     "Pneumothorax": "Look carefully at the lung apices and pleural edges for a thin visceral pleural line "
                     "with no lung markings beyond it.",
@@ -88,10 +92,9 @@ GUIDED = {
                    "heart and diaphragm, for any round or oval opacity.",
 }
 CONTROL = {
-    "Pneumothorax": "Take your time and review this whole chest X-ray image once more before you answer the "
-                    "question below.",
-    "Nodule/Mass": "Take your time and review this whole chest X-ray image once more before you answer the "
-                   "question below, please.",
+    "Pneumothorax": "Take a moment to review the whole image carefully before you give your answer.",
+    "Nodule/Mass": "Take a moment to review the whole image carefully and thoroughly before you give your "
+                   "final answer.",
 }
 
 
@@ -102,9 +105,10 @@ def slug(label):
 def questions():
     """qid -> question text. qid = <prompt>__<slug(VinDr label)>, prompt in plain / guided / control."""
     q = {f"plain__{slug(f)}": QUESTION.format(p) for f, p in YESNO_FINDINGS.items()}
-    for f, pre in GUIDED.items():
-        q[f"guided__{slug(f)}"] = pre + " " + QUESTION.format(YESNO_FINDINGS[f])
-        q[f"control__{slug(f)}"] = CONTROL[f] + " " + QUESTION.format(YESNO_FINDINGS[f])
+    for f in GUIDED:
+        head = QUESTION_ONLY.format(YESNO_FINDINGS[f])
+        q[f"guided__{slug(f)}"] = f"{head} {GUIDED[f]} {ANSWER}"
+        q[f"control__{slug(f)}"] = f"{head} {CONTROL[f]} {ANSWER}"
     return q
 
 
