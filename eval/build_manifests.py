@@ -17,6 +17,11 @@ is missing or unreadable.
 Usage (on the server, repo root, env cxreval):
     python -u eval/build_manifests.py 2>&1 | tee log/setup/build_manifests.log
     python -u eval/build_manifests.py --only chexpert
+    python -u eval/build_manifests.py --only vindr 2>&1 | tee log/setup/build_manifest_vindr.log
+
+  manifests/vindr.csv        (extension) 3000 VinDr test PNGs, width/height, mapped CheXpert GT columns,
+                             VinDr labels as vd_<label>; + manifests/vindr_boxes.csv (union box area per
+                             image x finding, part kept by the center crop). See eval/vindr_common.py.
 """
 import argparse
 import os
@@ -145,11 +150,98 @@ def build_mimic(a):
     return df, problems
 
 
+# ------------------------------------------------------------------ VinDr (extension experiments)
+def build_vindr(a):
+    """manifests/vindr.csv (one row per test image) + manifests/vindr_boxes.csv (one row per image x finding
+    with boxes: union area fraction of the image, fraction of that union kept by the center crop)."""
+    from PIL import Image
+    import vindr_common as vc
+
+    header("VinDr-CXR test")
+    lab = pd.read_csv(vc.VINDR_LABELS_TEST)
+    vlabels = [c for c in lab.columns if c not in vc.NON_LABEL_COLS]
+    print(f"labels: {len(lab)} rows, {lab['image_id'].nunique()} images, rows per image "
+          f"{dict(Counter(lab.groupby('image_id').size()))}  ({vc.VINDR_LABELS_TEST})")
+    print(f"VinDr label columns ({len(vlabels)}): {vlabels}")
+    needed = {v for vs, _ in vc.EXP1_ROWS.values() for v in vs} | set(vc.YESNO_FINDINGS) | {"No finding"}
+    unknown = sorted(needed - set(vlabels))
+    assert not unknown, f"names in vindr_common.py not in the label file: {unknown}"
+    vals = sorted({str(v) for c in vlabels for v in lab[c].unique()})
+    print(f"label values present: {vals}  (expected 0/1)")
+    img = lab.groupby("image_id")[vlabels].max().reset_index()  # test = consensus; max() only if >1 row
+
+    rows, problems = [], []
+    for i in img["image_id"]:
+        p = os.path.join(vc.VINDR_PNG_DIR, f"{i}.png")
+        try:
+            with Image.open(p) as im:  # header only
+                w, h = im.size
+        except OSError as e:
+            problems.append((p, f"unreadable: {e}"))
+            w = h = None
+        rows.append({"key": f"VinDr:{i}", "dataset": "VinDr", "image_id": i, "image_path": p, "study_id": i,
+                     "width": w, "height": h})
+    df = pd.DataFrame(rows)
+    if problems:
+        return df, problems
+    for cx in LABELS:  # mapped CheXpert GT (blank where VinDr has no equivalent, e.g. Support Devices)
+        src = vc.CHEXPERT_FROM_VINDR.get(cx)
+        df[cx] = img[src].max(axis=1).to_numpy() if src else float("nan")
+    for v in vlabels:
+        df[vc.vd(v)] = img[v].to_numpy()
+
+    print("\npositives per VinDr label (test, consensus):")
+    print(", ".join(f"{v} {int(img[v].sum())}" for v in vlabels))
+
+    # boxes
+    bx = pd.read_csv(vc.VINDR_BOXES_TEST)
+    bx = bx[bx["class_name"] != "No finding"].dropna(subset=["x_min", "y_min", "x_max", "y_max"])
+    print(f"\nboxes: {len(bx)} (excl. 'No finding'), images with boxes {bx['image_id'].nunique()}, "
+          f"rad_ids {sorted(bx['rad_id'].unique())[:10]}")
+    size = df.set_index("image_id")[["width", "height"]]
+    bx = bx.join(size, on="image_id")
+    outside = bx[(bx["x_max"] > bx["width"] + 1) | (bx["y_max"] > bx["height"] + 1) |
+                 (bx["x_min"] < -1) | (bx["y_min"] < -1)]
+    print(f"boxes outside the PNG: {len(outside)}  (0 expected: PNG = DICOM pixel grid)")
+    if len(outside):
+        problems.append(("(boxes)", f"{len(outside)} boxes outside the PNG, e.g. {outside.iloc[0].to_dict()}"))
+    lab_no_box = sorted(set(vlabels) - set(bx["class_name"]))
+    print(f"labels without any box (global labels): {lab_no_box}")
+
+    # one row per image x group; group = an Exp 1 row (its VinDr labels' boxes merged, e.g. rib + clavicle
+    # fracture) or a single VinDr label. Union over all boxes of the group (all radiologists listed).
+    groups = [("row", r, vs) for r, (vs, _) in vc.EXP1_ROWS.items()] + \
+             [("label", c, [c]) for c in sorted(bx["class_name"].unique())]
+    brows = []
+    for kind, gname, classes in groups:
+        sub = bx[bx["class_name"].isin(classes)]
+        for iid, g in sub.groupby("image_id"):
+            w, h = size.loc[iid]
+            boxes = list(g[["x_min", "y_min", "x_max", "y_max"]].itertuples(index=False, name=None))
+            u = vc.union_area(boxes)
+            kept = vc.union_area(vc.clip(boxes, vc.crop_box(w, h)))
+            brows.append({"kind": kind, "group": gname, "image_id": iid, "n_boxes": len(boxes), "union_area": u,
+                          "area_frac": u / (w * h), "kept_frac": kept / u if u else float("nan")})
+    bdf = pd.DataFrame(brows)
+    lab_rows = bdf[bdf["kind"] == "label"]
+    print(f"image x VinDr label with boxes: {len(lab_rows)}; area_frac quantiles 10/50/90% "
+          f"{lab_rows['area_frac'].quantile([.1, .5, .9]).round(4).tolist()}; "
+          f"union kept by the center crop < 50%: {int((lab_rows['kept_frac'] < .5).sum())}")
+
+    if problems:  # don't write a half-checked manifest
+        return df, problems
+    bpath = os.path.join(a.out, "vindr_boxes.csv")
+    bdf.to_csv(bpath, index=False)
+    print(f"-> {bpath}  ({len(bdf)} rows)")
+    return df, []
+
+
 # ------------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default=os.path.join(REPO, "manifests"))
-    ap.add_argument("--only", choices=["chexpert", "mimic"], nargs="*")
+    ap.add_argument("--only", choices=["chexpert", "mimic", "vindr"], nargs="*",
+                    help="default: chexpert + mimic; vindr is built only when named here")
     ap.add_argument("--chexpert_root", default=DEFAULTS["chexpert_root"])
     ap.add_argument("--mimic_csv", default=DEFAULTS["mimic_csv"])
     ap.add_argument("--mimic_jpg_root", default=MIMIC_JPG_ROOT)
@@ -159,8 +251,8 @@ def main():
     os.makedirs(a.out, exist_ok=True)
 
     failed = False
-    for name, fn in (("chexpert", build_chexpert), ("mimic", build_mimic)):
-        if a.only and name not in a.only:
+    for name, fn in (("chexpert", build_chexpert), ("mimic", build_mimic), ("vindr", build_vindr)):
+        if (a.only and name not in a.only) or (not a.only and name == "vindr"):
             continue
         df, problems = fn(a)
         path = os.path.join(a.out, f"{name}.csv")

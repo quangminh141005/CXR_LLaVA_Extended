@@ -36,7 +36,8 @@ from validate_labeler import DEFAULT_LABELER_DIR, LABELS  # noqa: E402
 from label_json import parse_labels  # noqa: E402
 from paths import RESULTS_INF, RESULTS_LABELS  # noqa: E402
 
-DATASETS = ["chexpert", "mimic"]
+DATASETS = ["chexpert", "mimic"]  # default
+EXTRA_DATASETS = ["vindr"]  # extension experiments, only when named
 
 
 def load_reports(path):
@@ -127,7 +128,7 @@ def cmd_collect_json(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--datasets", nargs="+", choices=DATASETS, default=None)
+    ap.add_argument("--datasets", nargs="+", choices=DATASETS + EXTRA_DATASETS, default=None)
     ap.add_argument("--manifests", default=os.path.join(REPO, "manifests"))
     ap.add_argument("--inference", default=RESULTS_INF, help="run_inference.py outputs (<ds>.jsonl)")
     ap.add_argument("--labels", default=RESULTS_LABELS, help="labeler I/O + <ds>_pred_labels*.csv")

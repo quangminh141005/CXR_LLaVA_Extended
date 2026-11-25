@@ -23,6 +23,7 @@ Usage (on the server, repo root, inference env, in tmux; no CPU jobs in parallel
     python -u eval/run_inference.py --limit 5 2>&1 | tee log/inference/inference_test.log   # quick test
     python -u eval/run_inference.py 2>&1 | tee -a log/inference/inference.log                # full run
     python -u eval/run_inference.py --datasets mimic 2>&1 | tee -a log/inference/inference.log
+    python -u eval/run_inference.py --datasets vindr 2>&1 | tee -a log/inference/inference_vindr.log   # extension
     python -u eval/run_inference.py --task labels --label_prompt gemini --limit 20 2>&1 | tee log/inference/labels_smoke_gemini.log
 """
 import argparse
@@ -40,7 +41,8 @@ sys.path.insert(0, os.path.join(REPO, "eval"))
 from label_json import parse_labels  # noqa: E402
 from paths import RESULTS_INF  # noqa: E402
 
-DATASETS = ["chexpert", "mimic"]
+DATASETS = ["chexpert", "mimic"]  # default
+EXTRA_DATASETS = ["vindr"]  # extension experiments, only when named
 ETA_EVERY = 25
 
 
@@ -152,7 +154,7 @@ def main():
                     help="report: free-text report (MIMIC protocol); labels: 0/1 JSON (CheXpert protocol)")
     ap.add_argument("--label_prompt", choices=["gemini", "gpt4v"], default="gemini",
                     help="label task only: which supplement prompt (see CXRLLAVAModel.LABEL_PROMPTS)")
-    ap.add_argument("--datasets", nargs="+", choices=DATASETS, default=None,
+    ap.add_argument("--datasets", nargs="+", choices=DATASETS + EXTRA_DATASETS, default=None,
                     help="default: both for report, chexpert for labels")
     ap.add_argument("--limit", type=int, default=None, help="only the first N manifest rows per dataset")
     ap.add_argument("--manifests", default=os.path.join(REPO, "manifests"))

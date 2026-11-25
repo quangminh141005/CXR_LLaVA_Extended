@@ -3,7 +3,8 @@
 results/
   inference/   raw model outputs: <ds>.jsonl, <ds>_labels_<prompt>.jsonl, run_info.json
   labels/      <ds>_pred_labels<tag>.csv, labeler/ (CheXpert-Labeler I/O), mimic_gt_relabel/
-  scores/      scores_<ds><tag>.csv
+  scores/      scores_<ds><tag>.csv, vindr_*.csv (extension experiments)
+  figures/     extension experiment plots (analyze_vindr.py)
 checks/        one-off sanity experiments: preprocess_check/, quant_check/, labeler_validation/
 log/           stdout of runs (tee): setup/, inference/, labeling/, scoring/
 """
@@ -15,6 +16,7 @@ RESULTS = os.path.join(REPO, "results")
 RESULTS_INF = os.path.join(RESULTS, "inference")
 RESULTS_LABELS = os.path.join(RESULTS, "labels")
 RESULTS_SCORES = os.path.join(RESULTS, "scores")
+RESULTS_FIGS = os.path.join(RESULTS, "figures")
 
 CHECKS = os.path.join(REPO, "checks")
 LOG = os.path.join(REPO, "log")

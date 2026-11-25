@@ -684,6 +684,69 @@ class CXRLLAVAModel(PreTrainedModel):
         ]
         return self._generate_text(chat, image, temperature, top_p, max_new_tokens)
 
+    # [repro] Extension Exp 2: yes/no probability of the FIRST answer token, no generation.
+    # Same system prompt, chat template, grayscale conversion and image processor as
+    # _generate_text. The prompt is split right after the image token: [system + image] is
+    # run once and its KV cache reused for every question (tokenizer_image_token tokenizes the
+    # text after <image> separately anyway, so the token ids are identical to the full prompt).
+    YES_TOKENS = ["▁Yes", "Yes", "▁yes", "yes", "▁YES", "YES"]
+    NO_TOKENS = ["▁No", "No", "▁no", "no", "▁NO", "NO"]
+
+    def _yes_no_ids(self):
+        unk = self.tokenizer.unk_token_id
+        ids = lambda toks: sorted({i for i in self.tokenizer.convert_tokens_to_ids(toks) if i is not None and i != unk})
+        return ids(self.YES_TOKENS), ids(self.NO_TOKENS)
+
+    def _yes_no_chat(self, question):
+        return [
+            {"role": "system",
+             "content": "You are a helpful radiologist. Try to interpret chest x ray image and answer to the question that user provides."},
+            {"role": "user", "content": "<image>\n" + question + "\n"}
+        ]
+
+    def yes_no_probs(self, image, questions, check_full=False):
+        """questions: {qid: text}. Returns {qid: {p_yes, mass_yes_no, top_token}} where
+        p_yes = sum P(yes variants) / (sum P(yes variants) + sum P(no variants)) at the first answer token,
+        mass_yes_no = P(yes or no variants) under the full-vocabulary softmax (should be close to 1),
+        top_token = the argmax token (what greedy decoding would start with).
+        check_full=True also runs the uncached full prompt and adds max_abs_logit_diff (cache sanity check)."""
+        import copy
+        with torch.no_grad():
+            if np.array(image).max() > 255:
+                raise Exception("16-bit image is not supported.")
+            arr = np.array(image.convert('L'))
+            if len(arr.shape) == 2:
+                arr = np.expand_dims(arr, axis=-1)
+            images = self.vision_tower.image_processor(arr, return_tensors='pt')['pixel_values'].to(self.device)
+            yes_ids, no_ids = self._yes_no_ids()
+
+            prefix_ids, prefix_past, out = None, None, {}
+            for qid, q in questions.items():
+                prompt = self.apply_chat_template(self._yes_no_chat(q))
+                ids = self.tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors='pt')
+                pos = int(torch.where(ids == IMAGE_TOKEN_INDEX)[0][0])
+                pre, suf = ids[:pos + 1], ids[pos + 1:]
+                if prefix_ids is None:
+                    prefix_ids = pre
+                    _, _, _, emb, _ = self.prepare_inputs_labels_for_multimodal(
+                        pre.unsqueeze(0).to(self.device), None, None, None, images)
+                    prefix_past = self.llama(inputs_embeds=emb, use_cache=True).past_key_values
+                assert torch.equal(pre, prefix_ids), "prompt prefix differs between questions"
+                past = prefix_past if isinstance(prefix_past, tuple) else copy.deepcopy(prefix_past)
+                h = self.llama(input_ids=suf.unsqueeze(0).to(self.device), past_key_values=past,
+                               use_cache=True).last_hidden_state
+                logits = self.lm_head(h[:, -1]).float()[0]
+                logp = torch.log_softmax(logits, dim=-1)
+                ly, ln = torch.logsumexp(logp[yes_ids], 0), torch.logsumexp(logp[no_ids], 0)
+                rec = {"p_yes": float(torch.sigmoid(ly - ln)),
+                       "mass_yes_no": float(torch.exp(torch.logaddexp(ly, ln))),
+                       "top_token": self.tokenizer.convert_ids_to_tokens(int(logits.argmax()))}
+                if check_full:
+                    full = self.forward(input_ids=ids.unsqueeze(0).to(self.device), images=images).logits[0, -1].float()
+                    rec["max_abs_logit_diff"] = float((full - logits).abs().max())
+                out[qid] = rec
+        return out
+
     def _generate_text(self, chat, image, temperature=0.0, top_p=0.8, max_new_tokens=512):
         with torch.no_grad():
             if np.array(image).max() > 255:
