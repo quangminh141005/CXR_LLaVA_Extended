@@ -9,6 +9,8 @@ __pycache__
 # test-set manifests (MIMIC paths/labels, PhysioNet DUA) and inference outputs
 manifests/
 results/
+# sanity-check outputs (contain MIMIC report text)
+checks/
 
 # Paper
 paper/

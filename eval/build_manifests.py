@@ -15,7 +15,7 @@ paths from the CSV (no big folder walks). Stops without writing a manifest if an
 is missing or unreadable.
 
 Usage (on the server, repo root, env cxreval):
-    python -u eval/build_manifests.py 2>&1 | tee log/build_manifests.log
+    python -u eval/build_manifests.py 2>&1 | tee log/setup/build_manifests.log
     python -u eval/build_manifests.py --only chexpert
 """
 import argparse

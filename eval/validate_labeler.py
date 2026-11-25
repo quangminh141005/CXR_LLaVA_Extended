@@ -18,9 +18,9 @@ Usage (on the server, repo root):
     python -u eval/validate_labeler.py prepare
     # in the labeler folder, env chexpert-label (the exact command is printed by prepare):
     python label.py --reports_path <out>/reports.csv --output_path <out>/labeled.csv
-    python -u eval/validate_labeler.py compare 2>&1 | tee log/labeler_validation/compare.log
+    python -u eval/validate_labeler.py compare 2>&1 | tee checks/labeler_validation/compare.log
 
-Output in log/labeler_validation/ (gitignored: contains MIMIC report text, PhysioNet DUA).
+Output in checks/labeler_validation/ (gitignored: contains MIMIC report text, PhysioNet DUA).
 """
 import argparse
 import csv
@@ -34,10 +34,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "eval"))
 from check_data import DEFAULTS  # noqa: E402  (same paths as Step 0)
 import mimic_section_parser as sp  # noqa: E402
+from paths import CHECKS  # noqa: E402
 
 MIMIC_LABELS = ("/storage/shared/MIMIC-CXR-JPG/physionet.org/files/mimic-cxr-jpg/2.1.0/"
                 "mimic-cxr-2.0.0-chexpert.csv.gz")
-DEFAULT_OUT = os.path.join(REPO, "log", "labeler_validation")
+DEFAULT_OUT = os.path.join(CHECKS, "labeler_validation")
 DEFAULT_LABELER_DIR = "/storage/student4/nqminh/chexpert-labeler"
 
 LABELS = ["No Finding", "Enlarged Cardiomediastinum", "Cardiomegaly", "Lung Lesion", "Lung Opacity",

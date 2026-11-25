@@ -3,8 +3,8 @@
 Model is loaded ONCE (4-bit NF4, same as the Step 2 smoke test), then each dataset runs
 in the same process, one after the other, each into its own file:
 
-  manifests/chexpert.csv -> results/chexpert.jsonl
-  manifests/mimic.csv    -> results/mimic.jsonl
+  manifests/chexpert.csv -> results/inference/chexpert.jsonl
+  manifests/mimic.csv    -> results/inference/mimic.jsonl
 
 One JSON line per image: {key, dataset, report, n_tokens, seconds, error}, flushed after
 every image. Decoding: greedy (temperature 0), prompt = write_radiologic_report default,
@@ -12,18 +12,18 @@ max 512 new tokens (generate_report()).
 
 Resumable: images already in the JSONL without error are skipped; images that failed are
 retried on the next run (the last line per key counts). Each run is recorded in
-results/run_info.json (git commit, settings, GPU, times).
+results/inference/run_info.json (git commit, settings, GPU, times).
 
 Label task (CheXpert, paper Fig. 2b): --task labels --label_prompt gemini|gpt4v
   asks the model for 0/1 JSON labels instead of a report ->
-  results/<ds>_labels_<prompt>.jsonl  {key, dataset, output, n_tokens, seconds, error}
+  results/inference/<ds>_labels_<prompt>.jsonl  {key, dataset, output, n_tokens, seconds, error}
   (parse with: python eval/label_reports.py collect-json --label_prompt <prompt>)
 
 Usage (on the server, repo root, inference env, in tmux; no CPU jobs in parallel):
-    python -u eval/run_inference.py --limit 5 2>&1 | tee log/inference_test.log   # quick test
-    python -u eval/run_inference.py 2>&1 | tee -a log/inference.log                # full run
-    python -u eval/run_inference.py --datasets mimic 2>&1 | tee -a log/inference.log
-    python -u eval/run_inference.py --task labels --label_prompt gemini --limit 20 2>&1 | tee log/labels_smoke_gemini.log
+    python -u eval/run_inference.py --limit 5 2>&1 | tee log/inference/inference_test.log   # quick test
+    python -u eval/run_inference.py 2>&1 | tee -a log/inference/inference.log                # full run
+    python -u eval/run_inference.py --datasets mimic 2>&1 | tee -a log/inference/inference.log
+    python -u eval/run_inference.py --task labels --label_prompt gemini --limit 20 2>&1 | tee log/inference/labels_smoke_gemini.log
 """
 import argparse
 import datetime
@@ -38,6 +38,7 @@ import pandas as pd
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "eval"))
 from label_json import parse_labels  # noqa: E402
+from paths import RESULTS_INF  # noqa: E402
 
 DATASETS = ["chexpert", "mimic"]
 ETA_EVERY = 25
@@ -155,7 +156,7 @@ def main():
                     help="default: both for report, chexpert for labels")
     ap.add_argument("--limit", type=int, default=None, help="only the first N manifest rows per dataset")
     ap.add_argument("--manifests", default=os.path.join(REPO, "manifests"))
-    ap.add_argument("--out", default=os.path.join(REPO, "results"))
+    ap.add_argument("--out", default=RESULTS_INF)
     ap.add_argument("--weights", default=os.path.join(REPO, "weights", "CXR-LLAVA-v2"))
     args = ap.parse_args()
     if args.datasets is None:

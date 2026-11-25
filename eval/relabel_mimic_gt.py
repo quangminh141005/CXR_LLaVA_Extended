@@ -4,7 +4,7 @@ Why: the official mimic-cxr-2.0.0-chexpert.csv labels only ONE section of each o
 report (impression > findings > ...). The paper ran CheXpert-Labeler on the reports itself
 (supplement, "Label Distribution in the MIMIC Internal Test Set") and has far more definite
 labels (e.g. Pneumothorax 1665 neg / 222 pos vs official 561 / 149). The predictions
-(results/mimic_pred_labels.csv) are already labeled from the FULL generated report and are
+(results/labels/mimic_pred_labels.csv) are already labeled from the FULL generated report and are
 not touched here. Which text the authors labeled is not stated, so two variants are tested:
 
   full     the whole original report (whitespace collapsed)
@@ -12,17 +12,17 @@ not touched here. Which text the authors labeled is not stated, so two variants 
            the full report when neither section exists (counted)
 
 Sub-commands (cxreval env), with the labeler run in between (chexpert-label env):
-  prepare  manifests/mimic.csv -> results/mimic_gt_relabel/<variant>_reports.csv (+ keys.csv)
+  prepare  manifests/mimic.csv -> results/labels/mimic_gt_relabel/<variant>_reports.csv (+ keys.csv)
   compare  labeler outputs -> label counts per variant vs official vs paper supplement
   build    --variant V -> manifests/mimic_gt_<V>.csv (manifest copy, labels replaced)
 
 Usage (on the server, repo root):
     python -u eval/relabel_mimic_gt.py prepare
     # env chexpert-label, in the labeler folder (exact commands printed by prepare)
-    python -u eval/relabel_mimic_gt.py compare 2>&1 | tee log/mimic_gt_compare.log
+    python -u eval/relabel_mimic_gt.py compare 2>&1 | tee log/labeling/mimic_gt_compare.log
     python -u eval/relabel_mimic_gt.py build --variant full
     python -u eval/score.py --datasets mimic --gt manifests/mimic_gt_full.csv --tag _gt_full \\
-        2>&1 | tee log/score_mimic_gt_full.log
+        2>&1 | tee log/scoring/score_mimic_gt_full.log
 
 Outputs contain MIMIC report text / labels (PhysioNet DUA): results/ and manifests/ are gitignored.
 """
@@ -37,6 +37,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "eval"))
 import mimic_section_parser as sp  # noqa: E402
 from validate_labeler import DEFAULT_LABELER_DIR, LABELS, MIMIC_FINDINGS, list_rindex  # noqa: E402
+from paths import RESULTS_LABELS  # noqa: E402
 
 VARIANTS = ["full", "findimp"]
 # supplement, "Label Distribution in the MIMIC Internal Test Set": (negative, positive, uncertain/missing)
@@ -62,7 +63,7 @@ def findimp(text):
 
 
 def out_dir(args):
-    return os.path.join(args.results, "mimic_gt_relabel")
+    return os.path.join(args.labels, "mimic_gt_relabel")
 
 
 def cmd_prepare(args):
@@ -166,7 +167,7 @@ def cmd_build(args):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--manifests", default=os.path.join(REPO, "manifests"))
-    ap.add_argument("--results", default=os.path.join(REPO, "results"))
+    ap.add_argument("--labels", default=RESULTS_LABELS, help="mimic_gt_relabel/ is created here")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prepare")
     p.add_argument("--labeler_dir", default=DEFAULT_LABELER_DIR, help="only used to print the next command")

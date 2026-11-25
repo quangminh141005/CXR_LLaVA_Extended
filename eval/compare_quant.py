@@ -1,6 +1,6 @@
 """Step 2.5 B: compare 4-bit (GPU) reports with the full-precision fp32 (CPU) reference.
 
-Three sub-commands, all writing to --out (default log/quant_check/):
+Three sub-commands, all writing to --out (default checks/quant_check/):
 
   select   pick the comparison set once -> selection.csv
            12 images per dataset = 6 enriched (one image positive for each of the 6
@@ -16,9 +16,9 @@ Three sub-commands, all writing to --out (default log/quant_check/):
 
 Usage (on the server, repo root):
     python -u eval/compare_quant.py select
-    python -u eval/compare_quant.py run --mode 4bit 2>&1 | tee log/quant_check/run_4bit.log
+    python -u eval/compare_quant.py run --mode 4bit 2>&1 | tee checks/quant_check/run_4bit.log
     numactl --cpunodebind=0 --membind=0 \
-      python -u eval/compare_quant.py run --mode fp32cpu 2>&1 | tee log/quant_check/run_fp32cpu.log
+      python -u eval/compare_quant.py run --mode fp32cpu 2>&1 | tee checks/quant_check/run_fp32cpu.log
     python -u eval/compare_quant.py compare
 """
 import argparse
@@ -34,11 +34,12 @@ import pandas as pd
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "eval"))
 from check_data import DEFAULTS, FINDINGS  # noqa: E402  (same paths/findings as Step 0)
+from paths import CHECKS  # noqa: E402
 
 MIMIC_JPG_ROOT = "/storage/shared/MIMIC-CXR-JPG/split-4/files"
 MIMIC_LABELS = ("/storage/shared/MIMIC-CXR-JPG/physionet.org/files/mimic-cxr-jpg/2.1.0/"
                 "mimic-cxr-2.0.0-chexpert.csv.gz")
-DEFAULT_OUT = os.path.join(REPO, "log", "quant_check")
+DEFAULT_OUT = os.path.join(CHECKS, "quant_check")
 N_ENRICHED, N_RANDOM = 6, 6
 FALLBACK_FINDING = "Pneumothorax"  # used when a finding has no positive in a dataset (VinDr Edema)
 

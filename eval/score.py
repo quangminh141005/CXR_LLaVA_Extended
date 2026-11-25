@@ -3,7 +3,7 @@
 Reference: Lee et al., European Radiology (2025) 35:4374-4386 (paper/CXR-LLAVA.pdf), Tables 2-3.
 
 GT:          manifests/<ds>.csv (CheXpert: radiologist 0/1; MIMIC: official CheXpert-Labeler labels)
-Prediction:  results/<ds>_pred_labels.csv (CheXpert-Labeler on the generated reports)
+Prediction:  results/labels/<ds>_pred_labels.csv (CheXpert-Labeler on the generated reports)
 
 Per finding, only images where GT AND prediction are definite (1 or 0) are scored
 ("uncertain" or not mentioned = excluded). Positive class = 1.
@@ -16,10 +16,10 @@ Average rows as in the paper (Average for 4 / 5 pathologies, Overall average):
 each resample recomputes every metric incl. the exclusion, so averages get CIs too.
 
 Usage (on the server, repo root, env cxreval):
-    python -u eval/score.py 2>&1 | tee log/score.log
-    python -u eval/score.py --datasets chexpert --tag _json_gemini 2>&1 | tee log/score_json_gemini.log
-Output: results/scores_<ds><tag>.csv (long format: one row per table row x metric)
---tag selects results/<ds>_pred_labels<tag>.csv (e.g. _json_gemini = label-prompt route)
+    python -u eval/score.py 2>&1 | tee log/scoring/score.log
+    python -u eval/score.py --datasets chexpert --tag _json_gemini 2>&1 | tee log/scoring/score_json_gemini.log
+Output: results/scores/scores_<ds><tag>.csv (long format: one row per table row x metric)
+--tag selects results/labels/<ds>_pred_labels<tag>.csv (e.g. _json_gemini = label-prompt route)
     and names the output; --gt replaces the GT manifest (one dataset at a time), e.g.
     python -u eval/score.py --datasets mimic --gt manifests/mimic_gt_full.csv --tag _gt_full
 """
@@ -33,6 +33,7 @@ import pandas as pd
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "eval"))
 from validate_labeler import LABELS  # noqa: E402
+from paths import RESULTS_LABELS, RESULTS_SCORES  # noqa: E402
 
 FOUR = ["Cardiomegaly", "Consolidation", "Edema", "Pleural Effusion"]
 # table rows in paper order: a finding name, or (average name, findings pooled)
@@ -182,7 +183,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--datasets", nargs="+", choices=list(ROWS), default=["chexpert", "mimic"])
     ap.add_argument("--manifests", default=os.path.join(REPO, "manifests"))
-    ap.add_argument("--results", default=os.path.join(REPO, "results"))
+    ap.add_argument("--labels", default=RESULTS_LABELS, help="folder with <ds>_pred_labels<tag>.csv")
+    ap.add_argument("--out", default=RESULTS_SCORES, help="folder for scores_<ds><tag>.csv")
     ap.add_argument("--n_boot", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tag", default="", help="prediction file suffix: <ds>_pred_labels<tag>.csv")
@@ -193,10 +195,11 @@ def main():
     if args.gt and len(args.datasets) != 1:
         ap.error("--gt needs exactly one --datasets")
     pred_tag = args.pred_tag if args.pred_tag is not None else ("" if args.gt else args.tag)
+    os.makedirs(args.out, exist_ok=True)
 
     for ds in args.datasets:
         gt_path = args.gt or os.path.join(args.manifests, f"{ds}.csv")
-        pred_path = os.path.join(args.results, f"{ds}_pred_labels{pred_tag}.csv")
+        pred_path = os.path.join(args.labels, f"{ds}_pred_labels{pred_tag}.csv")
         print(f"\nGT: {gt_path}\npredictions: {pred_path}")
         gt = pd.read_csv(gt_path)
         pred = pd.read_csv(pred_path)
@@ -204,7 +207,7 @@ def main():
         print(f"\n{'=' * 78}\n{ds.upper()}\n{'=' * 78}")
         print_pred_distribution(ds, df)
         print_tables(ds, out)
-        path = os.path.join(args.results, f"scores_{ds}{args.tag}.csv")
+        path = os.path.join(args.out, f"scores_{ds}{args.tag}.csv")
         out.to_csv(path, index=False)
         print(f"\n-> {path}")
     print("\nAverages: 'ours (micro)' pools TP/FP/FN/TN over the findings, as the paper does (Q9).")

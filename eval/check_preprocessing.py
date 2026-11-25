@@ -11,9 +11,9 @@ No model / GPU needed. Paths are built from the dataset CSVs (no folder listing,
 which hangs on /storage). Nothing is modified except the output folder.
 
 Usage (on the server):
-    python -u eval/check_preprocessing.py --out log/preprocess_check
+    python -u eval/check_preprocessing.py --out checks/preprocess_check
 
-Then look at log/preprocess_check/*.png (or overview.png). Check for:
+Then look at checks/preprocess_check/*.png (or overview.png). Check for:
 inverted images (bones dark), black/blank images, rotated images, and whether
 the crop cuts off lung apices or costophrenic angles.
 """
@@ -29,6 +29,7 @@ from PIL import Image, ImageDraw
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "eval"))
 from check_data import DEFAULTS  # noqa: E402  (same dataset paths as Step 0)
+from paths import CHECKS  # noqa: E402
 
 MIMIC_JPG_ROOT = "/storage/shared/MIMIC-CXR-JPG/split-4/files"  # complete copy (Step 0)
 PANEL = 512
@@ -113,7 +114,7 @@ def side_by_side(image, inp):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--weights", default=os.path.join(REPO, "weights", "CXR-LLAVA-v2"))
-    ap.add_argument("--out", default=os.path.join(REPO, "log", "preprocess_check"))
+    ap.add_argument("--out", default=os.path.join(CHECKS, "preprocess_check"))
     ap.add_argument("--n", type=int, default=3, help="images per dataset")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
